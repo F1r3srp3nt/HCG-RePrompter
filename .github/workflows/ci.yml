@@ -1,0 +1,51 @@
+name: CI
+
+# Build and test only. This workflow never signs with real credentials,
+# notarizes, uploads artifacts or publishes releases.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux · Foundation modules
+    runs-on: ubuntu-latest
+    container: swift:6.0-noble
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swift build
+      - name: Test
+        run: swift test
+
+  macos:
+    name: macOS · App, UI and all tests
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Build (debug)
+        run: swift build
+      - name: Test (including Keychain integration)
+        env:
+          REPROMPTER_KEYCHAIN_TESTS: "1"
+        run: swift test
+      - name: Assemble local app bundle (ad-hoc signed)
+        run: scripts/build-app.sh release
+      - name: Inspect bundle
+        run: |
+          ls -la "build/HCG RePrompter.app/Contents" "build/HCG RePrompter.app/Contents/Resources"
+          plutil -p "build/HCG RePrompter.app/Contents/Info.plist"

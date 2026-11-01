@@ -30,10 +30,17 @@ products.append(.executable(name: "RePrompter", targets: ["RePrompterApp"]))
 targets += [
     .target(
         name: "RePrompterUI",
-        dependencies: ["RePrompterCore", "RePrompterProviders", "RePrompterPersistence"]
+        dependencies: ["RePrompterCore", "RePrompterProviders", "RePrompterPersistence"],
+        resources: [.copy("Resources")]
     ),
-    .executableTarget(name: "RePrompterApp", dependencies: ["RePrompterUI"]),
-    .testTarget(name: "RePrompterUITests", dependencies: ["RePrompterUI"]),
+    .executableTarget(
+        name: "RePrompterApp",
+        dependencies: ["RePrompterUI", "RePrompterCore", "RePrompterPersistence"]
+    ),
+    .testTarget(
+        name: "RePrompterUITests",
+        dependencies: ["RePrompterUI", "RePrompterCore", "RePrompterProviders", "RePrompterPersistence"]
+    ),
 ]
 #endif
 
