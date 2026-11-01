@@ -176,7 +176,7 @@ struct ComparisonView: View {
             case .removed:
                 guard showRemoved else { continue }
                 part.backgroundColor = Theme.removed
-                part.strikethroughStyle = .single
+                part.strikethroughStyle = Text.LineStyle.single
                 part.foregroundColor = Theme.textSecondary
             }
             output += part

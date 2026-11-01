@@ -89,13 +89,13 @@ public typealias ProviderFactory = @MainActor (AppSettings, any CredentialStore)
 public final class AppModel {
     // MARK: Dependencies
 
-    @ObservationIgnored let location: StorageLocation?
-    @ObservationIgnored private let libraryStore: JSONFileStore<PromptLibrary>?
-    @ObservationIgnored private let templateStore: JSONFileStore<TemplateLibrary>?
-    @ObservationIgnored private let settingsStore: JSONFileStore<AppSettings>?
-    @ObservationIgnored let credentials: any CredentialStore
-    @ObservationIgnored private let providerFactory: ProviderFactory
-    @ObservationIgnored let retryPolicy: RetryPolicy
+    let location: StorageLocation?
+    private let libraryStore: JSONFileStore<PromptLibrary>?
+    private let templateStore: JSONFileStore<TemplateLibrary>?
+    private let settingsStore: JSONFileStore<AppSettings>?
+    let credentials: any CredentialStore
+    private let providerFactory: ProviderFactory
+    let retryPolicy: RetryPolicy
 
     // MARK: Persistent state
 

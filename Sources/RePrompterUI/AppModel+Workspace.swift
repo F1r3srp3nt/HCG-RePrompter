@@ -137,9 +137,13 @@ extension AppModel {
                 }
                 guard model.enhancementToken == token else { return }
                 model.apply(result, sourceText: sourceText)
-            } catch {
+            } catch let error as EnhancementError {
                 guard model.enhancementToken == token else { return }
                 model.phase = error == .cancelled ? .idle : .failed(error)
+            } catch {
+                // EnhancementService only throws EnhancementError; treat anything else as cancellation.
+                guard model.enhancementToken == token else { return }
+                model.phase = .idle
             }
             model.enhancementToken = nil
             model.enhancementTask = nil

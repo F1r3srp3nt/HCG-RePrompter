@@ -305,17 +305,13 @@ struct ErrorCard: View {
     }
 
     private var needsSettings: Bool {
-        switch error {
-        case let .provider(providerError):
-            switch providerError {
-            case .notConfigured, .missingAPIKey, .authenticationFailed, .invalidConfiguration, .insecureEndpoint,
-                 .modelNotFound, .truncated, .timeout, .credentialStore:
-                true
-            default:
-                false
-            }
+        guard case let .provider(providerError) = error else { return false }
+        switch providerError {
+        case .notConfigured, .missingAPIKey, .authenticationFailed, .invalidConfiguration, .insecureEndpoint,
+             .modelNotFound, .truncated, .timeout, .credentialStore:
+            return true
         default:
-            false
+            return false
         }
     }
 }
