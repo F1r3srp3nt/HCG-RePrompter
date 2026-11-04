@@ -75,7 +75,18 @@ struct AppModelTests {
         first.originalText = "Saved part"
         first.save()
         first.originalText = "Saved part, then more typing"
-        try await Task.sleep(nanoseconds: 300_000_000) // autosave delay, no explicit flush
+
+        // Wait for the autosave (no explicit flush). The model must stay alive
+        // meanwhile, as it does in the app: Swift may otherwise release it
+        // after its last use, and the autosave task holds it weakly.
+        let sessionURL = harness.location.sessionURL
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            let written = (try? JSONFileStore<WorkspaceSession>(url: sessionURL).load())?.text
+            if written == "Saved part, then more typing" { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        withExtendedLifetime(first) {}
 
         let second = harness.launch()
         #expect(second.originalText == "Saved part, then more typing")
