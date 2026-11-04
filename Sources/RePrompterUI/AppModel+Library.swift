@@ -5,9 +5,9 @@ import RePrompterPersistence
 extension AppModel {
     // MARK: Prompt library
 
-    /// ⌘F: shows the prompt list (History unless already in Saved) and focuses search.
+    /// ⌘F: shows the prompt list (the Library unless All Prompts is open) and focuses search.
     public func focusSearch() {
-        if selection != .saved && selection != .history { selection = .history }
+        if selection != .saved && selection != .history { selection = .saved }
         pendingSearchFocus = true
         searchFocusRequest += 1
     }
@@ -24,14 +24,15 @@ extension AppModel {
             showMessage("Enter a name")
             return
         }
-        if id == currentRecordID { self.title = library.record(id: id)?.title ?? self.title }
+        if id == currentRecordID, let renamed = library.record(id: id) { draft.title = renamed.title }
         persistLibrary()
     }
 
-    /// Permanently deletes prompts from history and the library.
+    /// Permanently deletes prompts. If the open prompt is deleted, its text
+    /// stays in the workspace as an unsaved draft.
     public func deleteRecords(_ ids: Set<UUID>) {
         let removed = library.delete(ids: ids)
-        if let current = currentRecordID, ids.contains(current) { currentRecordID = nil }
+        if let current = currentRecordID, ids.contains(current) { draft.recordID = nil }
         persistLibrary()
         if removed > 0 { showMessage(removed == 1 ? "Prompt deleted" : "\(removed) prompts deleted") }
     }
@@ -47,7 +48,7 @@ extension AppModel {
     public func setSaved(_ id: UUID, _ saved: Bool) {
         library.setSaved(id: id, saved)
         persistLibrary()
-        showMessage(saved ? "Saved to your library" : "Removed from your library (still in history)")
+        showMessage(saved ? "Added to your library" : "Removed from your library (still under All Prompts)")
     }
 
     public func setCollection(_ id: UUID, _ collection: String?) {
@@ -55,21 +56,33 @@ extension AppModel {
         persistLibrary()
     }
 
-    /// Deletes unsaved history entries. Saved prompts are kept.
+    /// Number of stored prompts that are not in the library (from earlier versions).
+    public var unsavedHistoryCount: Int { historyCount - savedCount }
+
+    /// Deletes prompts that are not saved to the library. Saved prompts are kept.
     public func clearHistory() {
         let removed = library.clearHistory()
-        if let current = currentRecordID, library.record(id: current) == nil { currentRecordID = nil }
+        if let current = currentRecordID, library.record(id: current) == nil { draft.recordID = nil }
         persistLibrary()
         showMessage(removed == 1 ? "1 history entry deleted" : "\(removed) history entries deleted")
     }
 
+    /// Exports a prompt's title and original text.
     public func exportRecord(_ record: PromptRecord, as format: ExportFormat) {
-        export(record.exportDocument, as: format)
+        let document = ExportDocument(
+            title: record.title,
+            originalPrompt: record.originalPrompt,
+            enhancedPrompt: nil,
+            mode: nil,
+            processor: nil,
+            report: nil
+        )
+        export(document, as: format)
     }
 
     public func copyRecord(_ record: PromptRecord) {
-        Clipboard.copy(record.effectivePrompt)
-        showMessage("Prompt copied")
+        Clipboard.copy(record.originalPrompt)
+        showMessage("Original prompt copied")
     }
 
     // MARK: Backup
@@ -172,7 +185,7 @@ extension AppModel {
             showMessage("Enter a prompt first")
             return nil
         }
-        let template = PromptTemplate(name: effectiveTitle, category: .writing, summary: "", body: body, suggestedMode: mode)
+        let template = PromptTemplate(name: effectiveTitle, category: .writing, summary: "", body: body, suggestedMode: settings.defaultMode)
         templates.save(template)
         persistTemplates()
         showMessage("Saved as a template")

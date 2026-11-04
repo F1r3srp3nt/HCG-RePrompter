@@ -1,312 +1,128 @@
 import Foundation
 import RePrompterCore
 import RePrompterPersistence
-import RePrompterProviders
 
 extension AppModel {
-    // MARK: Derived state
+    // MARK: Draft fields (bindable)
 
-    public var isRunning: Bool { phase.isRunning }
-
-    public var hasResult: Bool { result != nil }
-
-    /// The enhanced text differs from what the processor produced.
-    public var hasManualEdits: Bool {
-        guard let result else { return false }
-        return enhancedText != result.enhancedPrompt
+    public var title: String {
+        get { draft.title }
+        set { draft.title = newValue }
     }
 
-    /// The original prompt changed after the current result was produced.
-    public var isResultStale: Bool {
-        guard let source = resultSourceText else { return false }
-        return source != originalText
+    public var originalText: String {
+        get { draft.text }
+        set { draft.text = newValue }
     }
 
-    public var canEnhance: Bool {
-        !isRunning && !originalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && (mode != .custom || !customInstructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-    }
+    public var currentRecordID: UUID? { draft.recordID }
 
-    public var canCopyEnhanced: Bool { !enhancedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    /// The saved record the open draft belongs to, if any.
+    public var currentRecord: PromptRecord? { draft.baseline(in: library) }
 
-    public var effectiveTitle: String {
-        let trimmed = title.trimmingCharacters(in: .whitespaces)
-        return trimmed.isEmpty ? PromptRecord.makeTitle(from: originalText) : trimmed
-    }
+    public var hasUnsavedChanges: Bool { draft.hasUnsavedChanges(in: library) }
 
-    public var currentRecord: PromptRecord? { currentRecordID.flatMap { library.record(id: $0) } }
+    public var canSave: Bool { draft.canSave }
 
-    // MARK: Workspace lifecycle
+    public var effectiveTitle: String { draft.isBlank ? "Untitled Prompt" : draft.effectiveTitle }
 
-    /// Clears the workspace for a new prompt.
-    public func newPrompt() {
-        cancelEnhancement()
-        title = ""
-        originalText = ""
-        customInstructions = ""
-        mode = settings.defaultMode
-        processor = settings.defaultProcessor
-        clearResult()
-        currentRecordID = nil
-        phase = .idle
-        selection = .workspace
-    }
+    // MARK: Switching drafts (unsaved edits are protected)
 
-    func clearResult() {
-        result = nil
-        resultSourceText = nil
-        enhancedText = ""
-        reviewStatus = .draft
-        outputTab = .enhanced
-    }
+    public func requestNewPrompt() { request(.newPrompt) }
 
-    /// Loads a saved or historical prompt into the workspace.
-    public func open(_ record: PromptRecord) {
-        cancelEnhancement()
-        title = record.title
-        originalText = record.originalPrompt
-        mode = record.mode
-        customInstructions = record.customInstructions ?? ""
-        result = record.result
-        resultSourceText = record.result == nil ? nil : record.originalPrompt
-        enhancedText = record.enhancedPrompt ?? record.result?.enhancedPrompt ?? ""
-        reviewStatus = record.status
-        currentRecordID = record.id
-        if let processorKind = record.result?.processor {
-            processor = processorKind.isAI ? .aiProvider : .localFormatter
-        }
-        phase = .idle
-        outputTab = .enhanced
-        selection = .workspace
-    }
-
-    /// Starts a new prompt from a template.
-    public func useTemplate(_ template: PromptTemplate) {
-        newPrompt()
-        title = template.name
-        originalText = template.body
-        mode = template.suggestedMode
-        showMessage("Template inserted — replace the {{placeholders}} with your details")
-    }
-
-    // MARK: Enhancement
-
-    /// Starts enhancing the current prompt with the selected processor.
-    public func enhance() {
-        guard !isRunning else { return }
-        let request = EnhancementRequest(
-            originalPrompt: originalText,
-            mode: mode,
-            customInstructions: mode == .custom ? customInstructions : nil
-        )
-        do {
-            _ = try InputValidator.validate(request)
-        } catch {
-            phase = .failed(.input(error))
+    public func requestOpen(_ record: PromptRecord) {
+        guard record.id != draft.recordID else {
+            selection = .workspace
+            workspacePane = .original
             return
         }
+        request(.open(record.id))
+    }
 
-        if processor == .aiProvider {
-            guard hasAPIKey else {
-                phase = .failed(.provider(.notConfigured))
+    public func requestUseTemplate(_ template: PromptTemplate) { request(.useTemplate(template)) }
+
+    private func request(_ navigation: PendingNavigation) {
+        if hasUnsavedChanges {
+            pendingNavigation = navigation
+        } else {
+            perform(navigation)
+        }
+    }
+
+    /// Completes or cancels a navigation that was held because of unsaved edits.
+    public func resolvePendingNavigation(_ choice: UnsavedChangesChoice) {
+        guard let navigation = pendingNavigation else { return }
+        pendingNavigation = nil
+        switch choice {
+        case .save:
+            if save() { perform(navigation) }
+        case .discard:
+            perform(navigation)
+        case .cancel:
+            break
+        }
+    }
+
+    private func perform(_ navigation: PendingNavigation) {
+        switch navigation {
+        case .newPrompt:
+            draft = .empty
+        case let .open(id):
+            guard let record = library.record(id: id) else {
+                showMessage("That prompt no longer exists")
                 return
             }
-            if !settings.hasAcknowledgedProviderDisclosure {
-                pendingEnhanceAfterDisclosure = true
-                isShowingProviderDisclosure = true
-                return
-            }
+            draft = PromptDraft(record: record)
+        case let .useTemplate(template):
+            draft = PromptDraft(title: template.name, text: template.body)
+            showMessage("Template inserted — replace the {{placeholders}} with your details")
         }
-
-        let service = makeService()
-        let processor = self.processor
-        let sourceText = originalText
-        phase = .running(status: processor == .aiProvider ? "Sending to \(providerHost)…" : "Formatting locally…")
-
-        // AppModel is main-actor isolated (and therefore Sendable); the task
-        // holds it only until the enhancement finishes.
-        // A token identifies this run so a cancelled run can never overwrite
-        // the state of a newer one.
-        let model = self
-        let token = UUID()
-        enhancementToken = token
-        enhancementTask = Task {
-            do {
-                let result = try await service.enhance(request, processor: processor) { event in
-                    Task { @MainActor in model.handle(event, token: token) }
-                }
-                guard model.enhancementToken == token else { return }
-                model.apply(result, sourceText: sourceText)
-            } catch let error as EnhancementError {
-                guard model.enhancementToken == token else { return }
-                model.phase = error == .cancelled ? .idle : .failed(error)
-            } catch {
-                // EnhancementService only throws EnhancementError; treat anything else as cancellation.
-                guard model.enhancementToken == token else { return }
-                model.phase = .idle
-            }
-            model.enhancementToken = nil
-            model.enhancementTask = nil
-        }
-    }
-
-    func handle(_ event: EnhancementEvent, token: UUID) {
-        guard isRunning, enhancementToken == token else { return }
-        switch event {
-        case let .sending(attempt):
-            phase = .running(status: attempt == 1 ? "Waiting for \(providerHost)…" : "Retrying (attempt \(attempt))…")
-        case let .waitingToRetry(seconds, reason):
-            phase = .running(status: "\(reason) Retrying in \(Int(seconds.rounded(.up)))s…")
-        case .validating:
-            phase = .running(status: "Validating response…")
-        }
-    }
-
-    func apply(_ result: EnhancementResult, sourceText: String) {
-        self.result = result
-        resultSourceText = sourceText
-        enhancedText = result.enhancedPrompt
-        reviewStatus = .enhanced
-        phase = .idle
-        outputTab = .enhanced
-        recordInHistory()
-    }
-
-    /// Called from the disclosure sheet.
-    public func acknowledgeDisclosure(proceed: Bool, useLocalInstead: Bool = false) {
-        isShowingProviderDisclosure = false
-        let shouldEnhance = pendingEnhanceAfterDisclosure
-        pendingEnhanceAfterDisclosure = false
-        if proceed {
-            settings.hasAcknowledgedProviderDisclosure = true
-            if shouldEnhance { enhance() }
-        } else if useLocalInstead {
-            processor = .localFormatter
-            if shouldEnhance { enhance() }
-        }
-    }
-
-    public func cancelEnhancement() {
-        let wasRunning = isRunning
-        enhancementTask?.cancel()
-        enhancementTask = nil
-        enhancementToken = nil
-        if wasRunning {
-            phase = .idle
-            showMessage("Enhancement cancelled")
-        }
-    }
-
-    public func retry() {
-        phase = .idle
-        enhance()
-    }
-
-    public func dismissError() {
-        if case .failed = phase { phase = .idle }
-    }
-
-    /// Switches to the non-AI formatter after an AI failure and runs it.
-    public func useLocalFormatting() {
-        processor = .localFormatter
-        phase = .idle
-        enhance()
-    }
-
-    // MARK: Review
-
-    public func accept() {
-        guard hasResult else { return }
-        reviewStatus = .accepted
-        recordInHistory()
-        showMessage("Enhanced prompt accepted")
-    }
-
-    public func reject() {
-        guard let result else { return }
-        reviewStatus = .rejected
-        enhancedText = result.enhancedPrompt
-        recordInHistory()
-        showMessage("Enhancement rejected — the original prompt is kept")
-    }
-
-    public func revertEdits() {
-        guard let result else { return }
-        enhancedText = result.enhancedPrompt
-    }
-
-    /// Continue iterating: the enhanced prompt becomes the new original.
-    public func useEnhancedAsOriginal() {
-        guard canCopyEnhanced else { return }
-        let text = enhancedText
-        let keepTitle = title
-        cancelEnhancement()
-        clearResult()
-        currentRecordID = nil
-        originalText = text
-        title = keepTitle
-    }
-
-    // MARK: Clipboard
-
-    public func copyEnhanced() {
-        guard canCopyEnhanced else {
-            showMessage("There is no enhanced prompt to copy yet")
-            return
-        }
-        Clipboard.copy(enhancedText)
-        showMessage("Enhanced prompt copied")
-    }
-
-    public func copyOriginal() {
-        guard !originalText.isEmpty else { return }
-        Clipboard.copy(originalText)
-        showMessage("Original prompt copied")
+        workspacePane = .original
+        selection = .workspace
     }
 
     // MARK: Saving
 
-    /// Builds a record from the workspace state.
-    func makeRecord(saved: Bool? = nil) -> PromptRecord {
-        let existing = currentRecord
-        return PromptRecord(
-            id: currentRecordID ?? UUID(),
-            title: effectiveTitle,
-            originalPrompt: originalText,
-            enhancedPrompt: enhancedText.isEmpty ? nil : enhancedText,
-            mode: mode,
-            customInstructions: mode == .custom ? customInstructions : nil,
-            result: result,
-            status: reviewStatus,
-            isSaved: saved ?? existing?.isSaved ?? false,
-            collection: existing?.collection,
-            createdAt: existing?.createdAt ?? Date()
-        )
-    }
-
-    /// Writes the workspace to history when history is enabled, or updates
-    /// an existing saved record.
-    func recordInHistory() {
-        let isSaved = currentRecord?.isSaved ?? false
-        guard settings.saveHistory || isSaved else { return }
-        let record = makeRecord()
-        currentRecordID = record.id
-        library.upsert(record)
-        library.enforceHistoryLimit(settings.historyLimit)
+    /// Saves the open prompt to the library (⌘S). Returns false if nothing could be saved.
+    @discardableResult
+    public func save() -> Bool {
+        let saved: PromptRecord
+        do {
+            saved = try draft.save(into: &library)
+        } catch {
+            showMessage(PromptDraft.SaveError.emptyPrompt.errorDescription ?? "Nothing to save")
+            return false
+        }
+        draft = PromptDraft(record: saved)
         persistLibrary()
+        flushSession()
+        showMessage("Saved “\(saved.title)” to your library")
+        return true
     }
 
-    /// Saves the workspace prompt to the library (Cmd+S).
-    public func saveToLibrary() {
-        guard !originalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            showMessage("Enter a prompt before saving")
+    // MARK: Clipboard
+
+    public var canCopyOriginal: Bool { !draft.text.isEmpty }
+
+    public func copyOriginal() {
+        guard canCopyOriginal else {
+            showMessage("There is no text to copy yet")
             return
         }
-        let record = makeRecord(saved: true)
-        currentRecordID = record.id
-        library.upsert(record)
-        persistLibrary()
-        showMessage("Saved to your library")
+        Clipboard.copy(draft.text)
+        showMessage("Original prompt copied")
+    }
+
+    // MARK: HCG AI (not connected in this milestone)
+
+    public var repromptAvailability: RepromptAvailability { repromptService.availability }
+
+    /// Entry point for the future HCG AI integration. While the service is
+    /// disconnected this does nothing: no output is generated, no local
+    /// rewrite runs and nothing is sent over the network.
+    public func requestReprompt() {
+        guard repromptAvailability.isAvailable else { return }
+        // Connect the verified HCG AI client here in a later milestone.
     }
 
     // MARK: Export
@@ -314,16 +130,16 @@ extension AppModel {
     public var exportDocument: ExportDocument {
         ExportDocument(
             title: effectiveTitle,
-            originalPrompt: originalText,
-            enhancedPrompt: (reviewStatus == .rejected || enhancedText.isEmpty) ? nil : enhancedText,
-            mode: mode,
-            processor: result?.processor,
-            report: reviewStatus == .rejected ? nil : result?.report
+            originalPrompt: draft.text,
+            enhancedPrompt: nil,
+            mode: nil,
+            processor: nil,
+            report: nil
         )
     }
 
     public func exportWorkspace(as format: ExportFormat) {
-        guard !originalText.isEmpty else {
+        guard canCopyOriginal else {
             showMessage("Nothing to export yet")
             return
         }

@@ -2,7 +2,8 @@ import SwiftUI
 import RePrompterCore
 import RePrompterPersistence
 
-/// History (all prompts) and Saved Prompts (the library).
+/// The Library (saved prompts) and All Prompts (including older entries
+/// that were never saved to the library).
 struct LibraryView: View {
     @Environment(AppModel.self) private var model
     let scope: PromptLibrary.Scope
@@ -20,7 +21,9 @@ struct LibraryView: View {
     var body: some View {
         @Bindable var model = model
         let records = model.records(in: scope, query: model.librarySearchText, collection: scope == .saved ? collectionFilter : nil)
-        HSplitView {
+        // A fixed-width list beside a flexible preview: no split view and no
+        // minimum widths, so the window can always be resized safely.
+        HStack(spacing: 0) {
             Group {
                 if records.isEmpty {
                     EmptyStateView(
@@ -39,7 +42,7 @@ struct LibraryView: View {
                             contextMenu(for: record)
                         }
                     } primaryAction: { ids in
-                        if let id = ids.first, let record = model.library.record(id: id) { model.open(record) }
+                        if let id = ids.first, let record = model.library.record(id: id) { model.requestOpen(record) }
                     }
                     .listStyle(.inset)
                     .scrollContentBackground(.hidden)
@@ -48,7 +51,10 @@ struct LibraryView: View {
                     }
                 }
             }
-            .frame(minWidth: 300, idealWidth: 380, maxWidth: 520, maxHeight: .infinity)
+            .frame(width: 280)
+            .frame(maxHeight: .infinity)
+
+            Divider()
 
             Group {
                 if let id = selectedID, let record = model.library.record(id: id) {
@@ -57,10 +63,10 @@ struct LibraryView: View {
                     EmptyStateView(title: "Select a prompt", message: "Choose a prompt to preview it. Double-click or press Open to continue working on it.", systemImage: "text.magnifyingglass")
                 }
             }
-            .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Theme.background)
-        .navigationTitle(scope == .saved ? "Saved Prompts" : "History")
+        .navigationTitle(scope == .saved ? "Library" : "All Prompts")
         .searchable(text: $model.librarySearchText, placement: .toolbar, prompt: "Search prompts")
         .searchFocused($searchFocused)
         .onAppear {
@@ -88,10 +94,10 @@ struct LibraryView: View {
                     Button {
                         confirmClearHistory = true
                     } label: {
-                        Label("Clear History", systemImage: "trash")
+                        Label("Remove Unsaved Entries", systemImage: "trash")
                     }
-                    .help("Delete history entries that are not saved to your library")
-                    .disabled(model.historyCount == model.savedCount)
+                    .help("Delete entries from earlier versions that are not in your library")
+                    .disabled(model.unsavedHistoryCount == 0)
                 }
             }
         }
@@ -129,29 +135,27 @@ struct LibraryView: View {
                 pendingDeletion = nil
             }
         } message: {
-            Text("The prompt is removed from History and Saved Prompts on this Mac. This cannot be undone.")
+            Text("The prompt is removed from your library on this Mac. This cannot be undone. If it is open in the workspace, its text stays there as an unsaved draft.")
         }
-        .confirmationDialog("Clear History?", isPresented: $confirmClearHistory, titleVisibility: .visible) {
-            Button("Delete \(model.historyCount - model.savedCount) Entries", role: .destructive) {
+        .confirmationDialog("Remove unsaved entries?", isPresented: $confirmClearHistory, titleVisibility: .visible) {
+            Button("Delete \(model.unsavedHistoryCount) Entries", role: .destructive) {
                 model.clearHistory()
                 selectedID = nil
             }
         } message: {
-            Text("History entries that are not saved to your library are permanently deleted. Saved prompts are kept.")
+            Text("Entries that are not in your library are permanently deleted. Saved prompts are kept.")
         }
     }
 
-    private var emptyTitle: String { scope == .saved ? "No saved prompts" : "No history yet" }
+    private var emptyTitle: String { scope == .saved ? "Your library is empty" : "No prompts yet" }
     private var emptyMessage: String {
-        scope == .saved
-            ? "Press ⌘S in the workspace, or use “Save to Library” on any prompt in History."
-            : "Enhanced prompts appear here automatically (you can turn this off in Settings → Data & Privacy)."
+        "Write a prompt in the workspace and press ⌘S to save it here."
     }
 
     @ViewBuilder
     private func contextMenu(for record: PromptRecord) -> some View {
-        Button("Open in Workspace") { model.open(record) }
-        Button("Copy Prompt") { model.copyRecord(record) }
+        Button("Open in Workspace") { model.requestOpen(record) }
+        Button("Copy Original Text") { model.copyRecord(record) }
         Divider()
         Button("Rename…") {
             renameText = record.title
@@ -202,17 +206,20 @@ struct RecordRow: View {
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(2)
-            HStack(spacing: 6) {
-                Badge(text: record.mode.displayName, tint: Theme.textSecondary)
-                Badge(text: record.status.displayName, tint: record.status == .accepted ? Theme.success : Theme.textSecondary)
-                if let collection = record.collection {
-                    Badge(text: collection, systemImage: "folder", tint: Theme.violet)
+            if !record.isSaved || record.collection != nil {
+                HStack(spacing: 6) {
+                    if !record.isSaved {
+                        Badge(text: "Not in library", tint: Theme.textSecondary)
+                    }
+                    if let collection = record.collection {
+                        Badge(text: collection, systemImage: "folder", tint: Theme.accentSecondary)
+                    }
                 }
             }
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
-        .accessibilityAction(named: "Open in Workspace") { model.open(record) }
+        .accessibilityAction(named: "Open in Workspace") { model.requestOpen(record) }
     }
 }
 
@@ -224,40 +231,30 @@ struct RecordPreview: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    Text(record.title).font(.title3.weight(.semibold))
-                    Spacer()
-                    Button("Open in Workspace") { model.open(record) }
+                HStack(alignment: .firstTextBaseline) {
+                    Text(record.title)
+                        .font(.title3.weight(.semibold))
+                        .lineLimit(2)
+                    Spacer(minLength: 8)
+                    Button("Open") { model.requestOpen(record) }
                         .buttonStyle(.borderedProminent)
-                }
-                HStack(spacing: 6) {
-                    Badge(text: record.mode.displayName)
-                    Badge(text: record.status.displayName, tint: Theme.textSecondary)
-                    if let processor = record.result?.processor {
-                        Badge(text: processor.label, tint: processor.isAI ? Theme.accent : Theme.violet)
-                    }
+                        .help("Open in the workspace")
                 }
                 Text("Created \(record.createdAt.formatted(date: .abbreviated, time: .shortened)) · Updated \(record.updatedAt.formatted(date: .abbreviated, time: .shortened))")
                     .font(.caption)
                     .foregroundStyle(Theme.textTertiary)
 
-                if let enhanced = record.enhancedPrompt, record.status != .rejected {
-                    PreviewBlock(title: "Enhanced Prompt", text: enhanced)
-                }
                 PreviewBlock(title: "Original Prompt", text: record.originalPrompt)
 
                 HStack {
-                    Button("Copy") { model.copyRecord(record) }
+                    Button("Copy Original") { model.copyRecord(record) }
                     Menu("Export") {
                         ForEach(ExportFormat.allCases) { format in
                             Button(format.displayName) { model.exportRecord(record, as: format) }
                         }
                     }
                     .fixedSize()
-                    Button(record.isSaved ? "Remove from Library" : "Save to Library") {
-                        model.setSaved(record.id, !record.isSaved)
-                    }
-                    Spacer()
+                    Spacer(minLength: 8)
                     Button("Delete…", role: .destructive, action: onDelete)
                 }
             }

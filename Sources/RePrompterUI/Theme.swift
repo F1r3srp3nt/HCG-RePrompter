@@ -1,16 +1,18 @@
 import SwiftUI
 
-/// HCG design tokens: deep navy / near-black surfaces with restrained blue
-/// and violet accents.
+/// HCG design tokens: deep navy / near-black surfaces with restrained cyan
+/// accents taken from the HCG logo.
 enum Theme {
-    static let background = Color(red: 0.035, green: 0.043, blue: 0.078)
-    static let surface = Color(red: 0.058, green: 0.071, blue: 0.122)
-    static let surfaceRaised = Color(red: 0.082, green: 0.098, blue: 0.165)
+    static let background = Color(red: 0.027, green: 0.039, blue: 0.067)
+    static let surface = Color(red: 0.050, green: 0.067, blue: 0.110)
+    static let surfaceRaised = Color(red: 0.075, green: 0.094, blue: 0.150)
     static let border = Color.white.opacity(0.08)
     static let borderStrong = Color.white.opacity(0.14)
 
-    static let accent = Color(red: 0.36, green: 0.52, blue: 1.0)
-    static let violet = Color(red: 0.58, green: 0.45, blue: 0.98)
+    /// HCG cyan (the logo's glow), used sparingly for primary actions and focus.
+    static let accent = Color(red: 0.26, green: 0.78, blue: 0.96)
+    /// HCG blue, a quieter companion to the cyan.
+    static let accentSecondary = Color(red: 0.24, green: 0.52, blue: 0.92)
     static let textPrimary = Color.white.opacity(0.92)
     static let textSecondary = Color.white.opacity(0.62)
     static let textTertiary = Color.white.opacity(0.42)
@@ -22,7 +24,7 @@ enum Theme {
     static let inserted = Color(red: 0.36, green: 0.78, blue: 0.56).opacity(0.22)
     static let removed = Color(red: 0.96, green: 0.42, blue: 0.45).opacity(0.22)
 
-    static var accentGradient: LinearGradient { LinearGradient(colors: [accent, violet], startPoint: .leading, endPoint: .trailing) }
+    static var accentGradient: LinearGradient { LinearGradient(colors: [accent, accentSecondary], startPoint: .leading, endPoint: .trailing) }
 
     static let cornerRadius: CGFloat = 10
     static var editorFont: Font { .system(size: 13.5) }

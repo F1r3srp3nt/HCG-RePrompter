@@ -24,6 +24,11 @@ REPROMPTER_KEYCHAIN_TESTS=1 swift test      # macOS: also exercise the real Keyc
 | Templates, backup, export | Overrides and reset, import validation and merge, TXT/MD/JSON export, safe file names |
 | App workflows (macOS) | Local and AI flows, disclosure, cancellation, accept/reject/edit, save/delete/clear, history off, key storage |
 
+| Workspace drafts and sessions | Exact title and text survive save → disk → reload; unsaved-change detection; legacy-field preservation; session restore of unsaved edits; owner-only session file |
+| HCG AI integration point | The disconnected service is unavailable and never generates |
+| Offline workspace workflow (macOS) | Create, title, save, quit, relaunch; unsaved edits survive quit; Save / Don’t Save / Cancel; templates; delete open prompt; existing 0.1.0 data preserved; copy original to the pasteboard; reprompt gate never calls the service |
+| Window layout (macOS) | Hosts the real UI in a window and resizes it across the 860–1600 pt range with the inspector on and off, switches Original/Result, and visits every section at minimum size |
+
 ## Environments
 - **Linux (Docker `swift:6.0-noble`)**: Core, Providers and Persistence. This is used during development.
 - **macOS CI (`macos-15`)**: everything, including the SwiftUI module, app workflows, Keychain and bundle assembly.

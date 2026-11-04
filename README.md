@@ -5,7 +5,7 @@
 # HCG RePrompter
 
 **Native macOS prompt-engineering workstation by Hakmi Capital Group (HCG).**
-Version 0.1.0 — pre-release development build, not commercially released.
+Version 0.1.0 (offline workspace milestone) — pre-release development build, not commercially released.
 
 > Improve the instruction without changing the intention.
 
@@ -14,26 +14,34 @@ better-organized instructions for AI systems, while preserving the user's
 meaning, requirements and constraints — and it explains every change instead of
 claiming the result is "better" by an arbitrary score.
 
-## Features (v0.1.0)
+## Current milestone: offline prompt workspace
+
+This build is a working **offline** prompt workspace. AI reprompting arrives in
+a later milestone, once the HCG AI service is operational and its API is
+verified.
 
 | Area | What works |
 |---|---|
-| Workspace | Original prompt editor, six enhancement modes, editable enhanced output, accept / reject / revert edits, "use as original" for iteration |
-| Enhancement modes | Quick Improve, Structured, Professional, Developer, Creative, Custom (your own style instructions) |
-| AI provider | Anthropic Claude (Messages API, structured JSON output) with your own API key; cancellation, retry for transient errors, connection test |
-| Non-AI fallback | **Local Formatting (no AI)** — a deterministic, offline formatter, always labelled as non-AI and never used silently |
-| Validation | Response contract validation, preservation check of numbers, names, identifiers, quotes, URLs, code and negated instructions |
-| Comparison | Side-by-side and inline diff; Changes report: what changed, requirements preserved, optional suggestions, open questions, ambiguities, assumptions, warnings |
-| Inspector | Live local analysis: objective, requirements, constraints, expected output, missing information, ambiguities |
-| Library | Local history, saved prompts, collections, search, rename, duplicate, delete, export (TXT / Markdown / JSON), backup import/export |
+| Workspace | Title and original-prompt editor (most of the window), word and character counts, Save (⌘S), Copy Original (⇧⌘C) |
+| Library | Save prompts to a local library, reopen them, rename, duplicate, organize into collections, search, delete, export (TXT / Markdown / JSON), backup import/export |
+| Pick up where you left off | The open prompt, including unsaved edits, is autosaved and restored when you relaunch |
+| Unsaved edits | Starting a new prompt, opening another or using a template asks Save / Don’t Save / Cancel first |
+| Layout | Original and Result side by side on wide windows; on narrow windows an Original / Result switcher (your text is kept). Optional inspector (⌥⌘I). |
 | Templates | 10 curated, editable templates across 7 categories; create your own |
-| Security | API key in macOS Keychain only, HTTPS only, explicit disclosure before the first external request, no telemetry, owner-only data files |
+| Inspector | Prompt details plus a local, non-AI analysis: objective, requirements, constraints, missing information, vague wording |
+| HCG AI (future) | A visible, disabled **Reprompt with HCG AI** button. The Result pane reads “Reprompting will be available when HCG AI is connected.” |
+| Privacy | No network use, no API keys, no sign-in, no telemetry. Owner-only data files. |
+
+**Not in this milestone:** prompts are not generated, rewritten or sent anywhere.
+Every generation path is disabled, including menus and shortcuts.
 
 ## Requirements
 
 - macOS 15 or later (Apple Silicon primary; Intel builds are not tested)
-- Xcode 16 or later (Swift 6 toolchain)
-- An Anthropic API key for AI enhancement (optional — Local Formatting works without one)
+- **Xcode 16 or later, selected as the active developer directory.** Building with
+  only the Command Line Tools selected can fail with `no such module 'Testing'`.
+  Check with `xcode-select -p` (it should point inside `Xcode.app`) and fix with
+  `sudo xcode-select -s /Applications/Xcode.app`.
 
 ## Build and run
 
@@ -41,7 +49,7 @@ claiming the result is "better" by an arbitrary score.
 # Run from source
 swift run RePrompter
 
-# Run tests (no network, no paid API calls)
+# Run tests (no network)
 swift test
 
 # Assemble a local, ad-hoc signed app bundle: build/HCG RePrompter.app
@@ -51,29 +59,20 @@ open "build/HCG RePrompter.app"
 
 Or open `Package.swift` in Xcode, select the **RePrompter** scheme and run.
 
-## Configuration
-
-1. Open **Settings → AI Provider** (⌘,).
-2. Paste your Anthropic API key and choose **Save to Keychain**.
-3. Optionally choose a model (default `claude-opus-5-5`; suggestions include
-   `claude-sonnet-5-5` and `claude-haiku-5-5`), reasoning effort, output limit and timeout.
-4. **Test Connection** verifies the key and model without sending prompt text.
-
-The first AI request shows a disclosure explaining that the prompt is sent to
-the provider. Choose **Local · no AI** in the workspace to stay fully offline.
+Your data lives in `~/Library/Application Support/HCG RePrompter/`
+(`library.json`, `templates.json`, `settings.json`, `workspace.json`).
 
 ## Keyboard shortcuts
 
 | Shortcut | Action |
 |---|---|
 | ⌘N | New prompt |
-| ⌘↩ | Enhance |
-| ⌘. | Cancel enhancement |
-| ⇧⌘C | Copy enhanced prompt |
 | ⌘S | Save to library |
+| ⇧⌘C | Copy original prompt |
 | ⌘F | Search prompts |
+| ⌥⌘1 / ⌥⌘2 | Show Original / Result |
 | ⌥⌘I | Show / hide inspector |
-| ⌘1 – ⌘5 | Workspace, History, Saved, Templates, Settings |
+| ⌘1 – ⌘5 | Workspace, Library, All Prompts, Templates, Settings |
 | ⌘, | Settings |
 
 ## Documentation
@@ -87,12 +86,12 @@ the provider. Choose **Local · no AI** in the workspace to stay fully offline.
 
 ## Known limitations
 
-- One AI provider (Anthropic) in 0.1.0; the provider layer is designed for more.
-- Requests are non-streaming; long prompts wait for the full response (with a configurable timeout).
-- The local analyzer and formatter are heuristic and English-centred. They never invent requirements, but their classification can be imperfect.
-- The bundle from `scripts/build-app.sh` is ad-hoc signed for local use only. After a rebuild, macOS may ask again for permission to read the stored Keychain item.
-- Diff for very large texts falls back to line-level comparison.
-- UI automation (XCUITest) is not included; app workflows are tested at the model layer.
+- No AI reprompting yet (see above). The earlier Anthropic adapter remains in
+  `Sources/RePrompterProviders` with its tests, but the app does not use it.
+- The local analysis in the inspector is heuristic and English-centred.
+- The bundle from `scripts/build-app.sh` is ad-hoc signed for local use only.
+- Switching between the side-by-side and narrow layouts keeps your text; the
+  editor stays in place when only the Original pane is visible.
 
 ## Project separation
 

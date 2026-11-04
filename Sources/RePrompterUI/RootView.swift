@@ -8,10 +8,9 @@ public struct RootView: View {
     public init() {}
 
     public var body: some View {
-        @Bindable var model = model
         NavigationSplitView {
             SidebarView()
-                .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
+                .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 260)
         } detail: {
             DetailView()
                 .background(Theme.background)
@@ -27,11 +26,22 @@ public struct RootView: View {
         } message: { alert in
             Text(alert.message)
         }
-        .sheet(isPresented: $model.isShowingProviderDisclosure, onDismiss: {
-            // Dismissing without a choice cancels the pending request.
-            if model.isShowingProviderDisclosure == false { model.acknowledgeDisclosure(proceed: false) }
-        }) {
-            ProviderDisclosureSheet()
+        // Switching away from a prompt with unsaved edits. Dialog actions run
+        // before the dialog is dismissed, so the setter only acts when the
+        // dialog closes without a choice.
+        .confirmationDialog(
+            "Save changes to “\(model.effectiveTitle)”?",
+            isPresented: Binding(
+                get: { model.pendingNavigation != nil },
+                set: { if !$0 { model.resolvePendingNavigation(.cancel) } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Save") { model.resolvePendingNavigation(.save) }
+            Button("Don’t Save", role: .destructive) { model.resolvePendingNavigation(.discard) }
+            Button("Cancel", role: .cancel) { model.resolvePendingNavigation(.cancel) }
+        } message: {
+            Text("This prompt has edits that are not in your library. If you don’t save, they will be lost.")
         }
         .overlay(alignment: .bottom) {
             if let message = model.transientMessage {
@@ -60,8 +70,8 @@ struct DetailView: View {
             }
             switch model.selection ?? .workspace {
             case .workspace: WorkspaceView()
-            case .history: LibraryView(scope: .all)
             case .saved: LibraryView(scope: .saved)
+            case .history: LibraryView(scope: .all)
             case .templates: TemplatesView()
             case .settings: SettingsView().frame(maxWidth: 760).frame(maxWidth: .infinity)
             }
@@ -94,7 +104,7 @@ struct SidebarView: View {
         List(selection: $model.selection) {
             Section {
                 Button {
-                    model.newPrompt()
+                    model.requestNewPrompt()
                 } label: {
                     Label("New Prompt", systemImage: "square.and.pencil")
                 }
@@ -104,9 +114,9 @@ struct SidebarView: View {
 
                 row(.workspace)
             }
-            Section("Library") {
-                row(.history, count: model.historyCount)
+            Section("Prompts") {
                 row(.saved, count: model.savedCount)
+                row(.history, count: model.historyCount)
                 row(.templates)
             }
             Section {
@@ -117,7 +127,7 @@ struct SidebarView: View {
         .safeAreaInset(edge: .bottom) {
             VStack(alignment: .leading, spacing: 4) {
                 HCGLogoView(height: 22)
-                Text("\(AppInfo.shortName) \(AppInfo.version)")
+                Text("\(AppInfo.shortName) \(AppInfo.version) · Offline workspace")
                     .font(.caption2)
                     .foregroundStyle(Theme.textTertiary)
             }
@@ -132,48 +142,4 @@ struct SidebarView: View {
             .badge(count ?? 0)
             .tag(item)
     }
-}
-
-/// Explicit disclosure shown before the first prompt is sent to an external provider.
-struct ProviderDisclosureSheet: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                Image(systemName: "lock.shield")
-                    .font(.system(size: 26))
-                    .foregroundStyle(Theme.accentGradient)
-                Text("Send this prompt to an external AI provider?")
-                    .font(.title3.weight(.semibold))
-            }
-            Text("""
-            AI enhancement sends the text of your prompt (and any custom style instructions) over HTTPS to \
-            \(AnthropicDisplay.name) at \(model.providerHost), using your own API key. The provider processes it \
-            under the terms of your Anthropic account.
-            """)
-            .fixedSize(horizontal: false, vertical: true)
-            Text("""
-            Nothing is sent unless you choose Enhance with the AI provider selected. History stays on this Mac. \
-            Local Formatting (no AI) never sends anything.
-            """)
-            .foregroundStyle(Theme.textSecondary)
-            .fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Button("Cancel", role: .cancel) { model.acknowledgeDisclosure(proceed: false) }
-                    .keyboardShortcut(.cancelAction)
-                Spacer()
-                Button("Use Local Formatting") { model.acknowledgeDisclosure(proceed: false, useLocalInstead: true) }
-                Button("Send and Don’t Ask Again") { model.acknowledgeDisclosure(proceed: true) }
-                    .keyboardShortcut(.defaultAction)
-            }
-            .padding(.top, 6)
-        }
-        .padding(22)
-        .frame(width: 520)
-    }
-}
-
-enum AnthropicDisplay {
-    static let name = "Anthropic"
 }

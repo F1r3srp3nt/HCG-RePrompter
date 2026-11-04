@@ -108,4 +108,6 @@ public struct StorageLocation: Sendable, Equatable {
     public var libraryURL: URL { directory.appendingPathComponent("library.json") }
     public var templatesURL: URL { directory.appendingPathComponent("templates.json") }
     public var settingsURL: URL { directory.appendingPathComponent("settings.json") }
+    /// The open workspace draft, restored at launch.
+    public var sessionURL: URL { directory.appendingPathComponent("workspace.json") }
 }

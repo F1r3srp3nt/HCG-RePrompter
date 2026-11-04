@@ -3,8 +3,12 @@ import RePrompterCore
 
 /// Native menu commands and keyboard shortcuts.
 ///
-/// ⌘N new prompt · ⌘↩ enhance · ⌘. cancel · ⇧⌘C copy enhanced · ⌘S save ·
-/// ⌘F search prompts · ⌥⌘I inspector · ⌘, settings (provided by the Settings scene).
+/// ⌘N new prompt · ⌘S save · ⇧⌘C copy original · ⌘F search prompts ·
+/// ⌥⌘1 / ⌥⌘2 show Original / Result · ⌥⌘I inspector · ⌘1–⌘5 sections ·
+/// ⌘, settings (provided by the Settings scene).
+///
+/// There is no generation command or shortcut in this milestone: the only
+/// AI item is "Reprompt with HCG AI", disabled until HCG AI is connected.
 public struct AppCommands: Commands {
     let model: AppModel
     let openAbout: () -> Void
@@ -20,25 +24,27 @@ public struct AppCommands: Commands {
         }
 
         CommandGroup(replacing: .newItem) {
-            Button("New Prompt") { model.newPrompt() }
+            Button("New Prompt") { model.requestNewPrompt() }
                 .keyboardShortcut("n", modifiers: .command)
         }
 
         CommandGroup(replacing: .saveItem) {
-            Button("Save to Library") { model.saveToLibrary() }
+            Button("Save to Library") { model.save() }
                 .keyboardShortcut("s", modifiers: .command)
-            Menu("Export") {
+                .disabled(!model.canSave)
+            Menu("Export Original") {
                 ForEach(ExportFormat.allCases) { format in
                     Button(format.displayName) { model.exportWorkspace(as: format) }
                 }
             }
+            .disabled(!model.canCopyOriginal)
         }
 
         CommandGroup(after: .pasteboard) {
             Divider()
-            Button("Copy Enhanced Prompt") { model.copyEnhanced() }
-                .keyboardShortcut("c", modifiers: [.command, .shift])
             Button("Copy Original Prompt") { model.copyOriginal() }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+                .disabled(!model.canCopyOriginal)
         }
 
         CommandGroup(after: .textEditing) {
@@ -47,26 +53,19 @@ public struct AppCommands: Commands {
         }
 
         CommandMenu("Prompt") {
-            Button("Enhance") { model.enhance() }
-                .keyboardShortcut(.return, modifiers: .command)
-                .disabled(!model.canEnhance)
-            Button("Cancel Enhancement") { model.cancelEnhancement() }
-                .keyboardShortcut(".", modifiers: .command)
-                .disabled(!model.isRunning)
-            Divider()
-            Picker("Mode", selection: Binding(get: { model.mode }, set: { model.mode = $0 })) {
-                ForEach(EnhancementMode.allCases) { Text($0.displayName).tag($0) }
+            Button("Show Original") {
+                model.selection = .workspace
+                model.workspacePane = .original
             }
-            Picker("Processor", selection: Binding(get: { model.processor }, set: { model.processor = $0 })) {
-                ForEach(ProcessorChoice.allCases) { Text($0.displayName).tag($0) }
+            .keyboardShortcut("1", modifiers: [.command, .option])
+            Button("Show Result") {
+                model.selection = .workspace
+                model.workspacePane = .result
             }
+            .keyboardShortcut("2", modifiers: [.command, .option])
             Divider()
-            Button("Accept Enhanced Prompt") { model.accept() }
-                .disabled(!model.hasResult)
-            Button("Reject Enhancement") { model.reject() }
-                .disabled(!model.hasResult)
-            Button("Use Enhanced as Original") { model.useEnhancedAsOriginal() }
-                .disabled(!model.canCopyEnhanced)
+            Button(HCGAI.actionTitle) { model.requestReprompt() }
+                .disabled(!model.repromptAvailability.isAvailable)
         }
 
         CommandGroup(before: .sidebar) {
