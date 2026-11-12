@@ -17,6 +17,35 @@ RePrompterApp ──► RePrompterUI ──► RePrompterPersistence ──► R
 | `RePrompterUI` | `AppModel` (main-actor state), SwiftUI views, design system, menu commands, brand assets. |
 | `RePrompterApp` | Entry point, window and Settings scenes, About window, app delegate. |
 
+## Offline workspace milestone (current app behaviour)
+
+The app currently uses only the offline parts of the codebase:
+
+- **Draft model.** `PromptDraft` (Persistence) is the single source of truth for the open
+  prompt (title, text, linked record). It decides whether there are unsaved changes and saves
+  into `PromptLibrary`, preserving every other field of an existing record. `AppModel.title`
+  and `AppModel.originalText` are bindings onto it, so layout changes can never lose text.
+- **Session restore.** `WorkspaceSession` is written to `workspace.json` about 0.5 s after the
+  last edit, after every save, and on quit. At launch the draft is restored, unsaved edits
+  included. A link to a deleted record becomes an unsaved draft.
+- **Unsaved-change protection.** New prompt, open prompt and use template go through
+  `PendingNavigation`. The UI asks Save / Don’t Save / Cancel when the draft has unsaved edits.
+- **HCG AI integration point.** `HCGRepromptService` (Core) is the only path to reprompting.
+  The app injects `DisconnectedHCGAIService`, which always reports
+  `.unavailable("Reprompting will be available when HCG AI is connected.")`. The UI shows a
+  disabled “Reprompt with HCG AI” button and an empty Result pane. To connect HCG AI later,
+  implement the protocol against the verified API in its own module and pass it to
+  `AppModel(location:repromptService:)`.
+- **Layout.** The workspace sizes itself from a `GeometryReader`, not from minimum widths.
+  Content of at least 760 pt shows Original (64%) and Result side by side; below that, a
+  switcher shows one at a time. The inspector is a fixed 260 pt column. Library and Templates
+  use a fixed-width list beside a flexible detail view. No view asks for more width than the
+  860 pt window minimum provides.
+- `RePrompterProviders` (the Anthropic adapter from 0.1.0) still builds and is tested, but the
+  app does not reference it.
+
+The sections below describe the enhancement pipeline that the AI milestone will build on.
+
 ## Enhancement flow
 
 1. `InputValidator` sanitizes the text (control and bidi characters removed) and enforces limits.

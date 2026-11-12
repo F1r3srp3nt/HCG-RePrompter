@@ -2,6 +2,13 @@
 
 User prompts are treated as potentially confidential, untrusted data.
 
+## Current milestone: offline only
+
+In this build the app makes **no network requests**. It does not read or write the Keychain,
+does not ask for API keys or a sign-in, and does not generate or rewrite prompts. The
+sections on credentials, network and prompt injection below describe the AI pipeline kept in
+the codebase for a later milestone. The app does not use that pipeline now.
+
 ## Credentials
 - API keys are stored only in the macOS Keychain (generic password,
   `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, service `com.hakmicapital.reprompter.credentials`).

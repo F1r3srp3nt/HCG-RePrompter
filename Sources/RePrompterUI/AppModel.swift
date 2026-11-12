@@ -2,13 +2,12 @@ import Foundation
 import Observation
 import RePrompterCore
 import RePrompterPersistence
-import RePrompterProviders
 
 /// Top-level navigation destinations.
 public enum SidebarItem: String, Hashable, Identifiable, CaseIterable, Sendable {
     case workspace
-    case history
     case saved
+    case history
     case templates
     case settings
 
@@ -17,8 +16,8 @@ public enum SidebarItem: String, Hashable, Identifiable, CaseIterable, Sendable 
     var title: String {
         switch self {
         case .workspace: "Workspace"
-        case .history: "History"
-        case .saved: "Saved Prompts"
+        case .saved: "Library"
+        case .history: "All Prompts"
         case .templates: "Templates"
         case .settings: "Settings"
         }
@@ -27,40 +26,40 @@ public enum SidebarItem: String, Hashable, Identifiable, CaseIterable, Sendable 
     var symbolName: String {
         switch self {
         case .workspace: "rectangle.and.pencil.and.ellipsis"
+        case .saved: "books.vertical"
         case .history: "clock.arrow.circlepath"
-        case .saved: "bookmark"
         case .templates: "doc.on.doc"
         case .settings: "gearshape"
         }
     }
 }
 
-/// Output tabs of the workspace.
-public enum OutputTab: String, CaseIterable, Identifiable, Sendable {
-    case enhanced
-    case compare
-    case changes
+/// The two workspace panes. On narrow windows only one is shown at a time.
+public enum WorkspacePane: String, CaseIterable, Identifiable, Sendable {
+    case original
+    case result
 
     public var id: String { rawValue }
     var title: String {
         switch self {
-        case .enhanced: "Enhanced"
-        case .compare: "Compare"
-        case .changes: "Changes"
+        case .original: "Original"
+        case .result: "Result"
         }
     }
 }
 
-/// The state of the current enhancement.
-public enum EnhancementPhase: Equatable, Sendable {
-    case idle
-    case running(status: String)
-    case failed(EnhancementError)
+/// A navigation that would replace the open draft.
+public enum PendingNavigation: Equatable, Sendable {
+    case newPrompt
+    case open(UUID)
+    case useTemplate(PromptTemplate)
+}
 
-    var isRunning: Bool {
-        if case .running = self { return true }
-        return false
-    }
+/// The user's answer when switching away from unsaved edits.
+public enum UnsavedChangesChoice: Sendable {
+    case save
+    case discard
+    case cancel
 }
 
 /// A user-facing alert.
@@ -70,20 +69,12 @@ public struct AppAlert: Identifiable, Equatable, Sendable {
     public var message: String
 }
 
-/// Result of the most recent provider connection test.
-public enum ConnectionStatus: Equatable, Sendable {
-    case unknown
-    case checking
-    case connected(String)
-    case failed(String)
-}
-
-/// Creates the AI provider for the current settings, or nil when none can be
-/// used. Injected so tests can supply mock providers.
-public typealias ProviderFactory = @MainActor (AppSettings, any CredentialStore) -> (any AIProvider)?
-
-/// Application state shared by all windows. All mutations happen on the
-/// main actor; provider calls run concurrently and report back here.
+/// Application state shared by all windows. All mutations happen on the main actor.
+///
+/// This milestone is an offline prompt workspace: nothing here sends prompt
+/// text anywhere, reads credentials, or generates output. Reprompting is
+/// routed through `repromptService`, which is `DisconnectedHCGAIService`
+/// until the HCG AI service is connected.
 @MainActor
 @Observable
 public final class AppModel {
@@ -93,9 +84,10 @@ public final class AppModel {
     private let libraryStore: JSONFileStore<PromptLibrary>?
     private let templateStore: JSONFileStore<TemplateLibrary>?
     private let settingsStore: JSONFileStore<AppSettings>?
-    let credentials: any CredentialStore
-    private let providerFactory: ProviderFactory
-    let retryPolicy: RetryPolicy
+    private let sessionStore: JSONFileStore<WorkspaceSession>?
+    let repromptService: any HCGRepromptService
+    /// How long after the last edit the open draft is written to disk.
+    let sessionSaveDelay: Double
 
     // MARK: Persistent state
 
@@ -105,69 +97,48 @@ public final class AppModel {
     public internal(set) var library: PromptLibrary
     public internal(set) var templates: TemplateLibrary
 
+    /// The prompt open in the workspace. Every edit is autosaved to the
+    /// workspace session (not the library) so nothing is lost on quit.
+    public internal(set) var draft: PromptDraft {
+        didSet { if draft != oldValue { scheduleSessionSave() } }
+    }
+
     // MARK: Navigation & app-wide UI state
 
     public var selection: SidebarItem? = .workspace
+    public var workspacePane: WorkspacePane = .original
+    public internal(set) var pendingNavigation: PendingNavigation?
     public var alert: AppAlert?
     public var transientMessage: String?
     public var storageWarning: String?
-    public var isShowingProviderDisclosure = false
     /// Incremented to ask the library view to focus its search field.
     public var searchFocusRequest = 0
     /// Set when search was requested before the library view appeared.
     public var pendingSearchFocus = false
     public var librarySearchText = ""
 
-    // MARK: Credentials
-
-    public internal(set) var hasAPIKey = false
-    public internal(set) var apiKeyHint: String?
-    public var connectionStatus: ConnectionStatus = .unknown
-
-    // MARK: Workspace
-
-    public var title = ""
-    public var originalText = "" {
-        didSet { if originalText != oldValue, case .failed = phase { phase = .idle } }
-    }
-    public var mode: EnhancementMode
-    public var customInstructions = ""
-    public var processor: ProcessorChoice
-    public internal(set) var phase: EnhancementPhase = .idle
-    public internal(set) var result: EnhancementResult?
-    /// The original text the current result was produced from.
-    public internal(set) var resultSourceText: String?
-    public var enhancedText = ""
-    public internal(set) var reviewStatus: PromptRecord.ReviewStatus = .draft
-    public internal(set) var currentRecordID: UUID?
-    public var outputTab: OutputTab = .enhanced
-
-    @ObservationIgnored var enhancementTask: Task<Void, Never>?
-    @ObservationIgnored var enhancementToken: UUID?
-    @ObservationIgnored var pendingEnhanceAfterDisclosure = false
     @ObservationIgnored private var messageTask: Task<Void, Never>?
-    @ObservationIgnored private var analysisCache: (text: String, mode: EnhancementMode, analysis: PromptAnalysis)?
+    @ObservationIgnored private var sessionSaveTask: Task<Void, Never>?
+    @ObservationIgnored private var analysisCache: (text: String, analysis: PromptAnalysis)?
 
     // MARK: Init
 
     public init(
         location: StorageLocation?,
-        credentials: any CredentialStore,
-        retryPolicy: RetryPolicy = .standard,
-        providerFactory: ProviderFactory? = nil
+        repromptService: any HCGRepromptService = DisconnectedHCGAIService(),
+        sessionSaveDelay: Double = 0.5
     ) {
         self.location = location
-        self.credentials = credentials
-        self.providerFactory = providerFactory ?? { settings, credentials in
-            AppModel.makeDefaultProvider(settings: settings, credentials: credentials)
-        }
-        self.retryPolicy = retryPolicy
+        self.repromptService = repromptService
+        self.sessionSaveDelay = sessionSaveDelay
         let libraryStore = location.map { JSONFileStore<PromptLibrary>(url: $0.libraryURL) }
         let templateStore = location.map { JSONFileStore<TemplateLibrary>(url: $0.templatesURL) }
         let settingsStore = location.map { JSONFileStore<AppSettings>(url: $0.settingsURL) }
+        let sessionStore = location.map { JSONFileStore<WorkspaceSession>(url: $0.sessionURL) }
         self.libraryStore = libraryStore
         self.templateStore = templateStore
         self.settingsStore = settingsStore
+        self.sessionStore = sessionStore
 
         var warnings: [String] = []
         func load<T>(_ store: JSONFileStore<T>?, fallback: T, name: String) -> T {
@@ -178,31 +149,21 @@ public final class AppModel {
             }
             return value
         }
-        let loadedSettings = load(settingsStore, fallback: AppSettings.default, name: "settings")
-        settings = loadedSettings
-        library = load(libraryStore, fallback: PromptLibrary(), name: "prompt library")
+        settings = load(settingsStore, fallback: AppSettings.default, name: "settings")
+        let loadedLibrary = load(libraryStore, fallback: PromptLibrary(), name: "prompt library")
+        library = loadedLibrary
         templates = load(templateStore, fallback: TemplateLibrary(), name: "templates")
-        mode = loadedSettings.defaultMode
-        processor = loadedSettings.defaultProcessor
+        let session = load(sessionStore, fallback: WorkspaceSession(draft: .empty), name: "open prompt")
+        draft = WorkspaceSession.restoredDraft(from: session, library: loadedLibrary)
         if location == nil {
             warnings.append("The application data folder is unavailable. Prompts will not be saved this session.")
         }
         storageWarning = warnings.isEmpty ? nil : warnings.joined(separator: "\n")
-        refreshCredentialState()
     }
 
-    /// The production configuration: Application Support storage and the Keychain.
+    /// The production configuration: `~/Library/Application Support/HCG RePrompter/`.
     public static func live() -> AppModel {
-        #if canImport(Security)
-        let credentials: any CredentialStore = KeychainCredentialStore()
-        #else
-        let credentials: any CredentialStore = InMemoryCredentialStore()
-        #endif
-        return AppModel(location: try? StorageLocation.applicationSupport(), credentials: credentials)
-    }
-
-    public static func makeDefaultProvider(settings: AppSettings, credentials: any CredentialStore) -> (any AIProvider)? {
-        AnthropicProvider(configuration: settings.anthropic, credentials: credentials)
+        AppModel(location: try? StorageLocation.applicationSupport())
     }
 
     // MARK: Persistence
@@ -234,6 +195,28 @@ public final class AppModel {
         }
     }
 
+    private func scheduleSessionSave() {
+        sessionSaveTask?.cancel()
+        let delay = sessionSaveDelay
+        sessionSaveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(0, delay) * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.flushSession()
+        }
+    }
+
+    /// Writes the open draft to disk now. Called on quit and after saving.
+    public func flushSession() {
+        sessionSaveTask?.cancel()
+        sessionSaveTask = nil
+        guard let sessionStore else { return }
+        do {
+            try sessionStore.save(WorkspaceSession(draft: draft))
+        } catch {
+            storageWarning = (error as? LocalizedError)?.errorDescription ?? "Could not save the open prompt."
+        }
+    }
+
     // MARK: Messages
 
     func showMessage(_ message: String) {
@@ -250,79 +233,13 @@ public final class AppModel {
         alert = AppAlert(title: title, message: message)
     }
 
-    // MARK: Credentials
-
-    func refreshCredentialState() {
-        do {
-            let key = try credentials.secret(for: AnthropicConfiguration.credentialAccount)
-            hasAPIKey = !(key ?? "").isEmpty
-            apiKeyHint = key.map(APIKeyValidator.maskedHint)
-        } catch {
-            hasAPIKey = false
-            apiKeyHint = nil
-        }
-    }
-
-    /// Validates and stores an API key in the Keychain. The key is not kept in memory.
-    public func saveAPIKey(_ input: String) throws {
-        let key = try APIKeyValidator.normalize(input)
-        try credentials.setSecret(key, for: AnthropicConfiguration.credentialAccount)
-        refreshCredentialState()
-        connectionStatus = .unknown
-        showMessage("API key saved to the Keychain")
-    }
-
-    public func removeAPIKey() {
-        do {
-            try credentials.deleteSecret(for: AnthropicConfiguration.credentialAccount)
-            refreshCredentialState()
-            connectionStatus = .unknown
-            showMessage("API key removed")
-        } catch {
-            showAlert("Could Not Remove Key", (error as? LocalizedError)?.errorDescription ?? "Keychain error.")
-        }
-    }
-
-    /// Checks the key and model without sending any prompt text.
-    public func testConnection() async {
-        guard hasAPIKey else {
-            connectionStatus = .failed(ProviderError.missingAPIKey.errorDescription ?? "")
-            return
-        }
-        guard let provider = providerFactory(settings, credentials) else {
-            connectionStatus = .failed(ProviderError.notConfigured.errorDescription ?? "")
-            return
-        }
-        connectionStatus = .checking
-        do {
-            let result = try await provider.validateConnection()
-            connectionStatus = .connected(result.modelDisplayName ?? result.model)
-        } catch let error as ProviderError {
-            connectionStatus = .failed(error.errorDescription ?? "Connection failed.")
-        } catch {
-            connectionStatus = .failed(SecretRedactor.redact(error.localizedDescription))
-        }
-    }
-
-    // MARK: Provider
-
-    /// Whether AI enhancement can be attempted right now.
-    public var isAIProviderReady: Bool { hasAPIKey && (try? settings.anthropic.validate()) != nil }
-
-    var providerHost: String { settings.anthropic.baseURL.host ?? "api.anthropic.com" }
-
-    func makeService() -> EnhancementService {
-        let provider = hasAPIKey ? providerFactory(settings, credentials) : nil
-        return EnhancementService(provider: provider, retryPolicy: retryPolicy)
-    }
-
     // MARK: Analysis
 
-    /// Deterministic analysis of the current original prompt (memoized).
+    /// Deterministic, local analysis of the open prompt (memoized). Not AI.
     public var liveAnalysis: PromptAnalysis {
-        if let cache = analysisCache, cache.text == originalText, cache.mode == mode { return cache.analysis }
-        let analysis = PromptAnalyzer.analyze(originalText, mode: mode)
-        analysisCache = (originalText, mode, analysis)
+        if let cache = analysisCache, cache.text == draft.text { return cache.analysis }
+        let analysis = PromptAnalyzer.analyze(draft.text, mode: currentRecord?.mode ?? settings.defaultMode)
+        analysisCache = (draft.text, analysis)
         return analysis
     }
 }

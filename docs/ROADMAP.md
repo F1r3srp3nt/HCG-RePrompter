@@ -8,6 +8,13 @@
 - **M4 – Quality and packaging** 🟡 accessibility labels and keyboard navigation; automated tests; local bundle script.
   Still open: hands-on accessibility audit with VoiceOver, and real-device QA on Apple Silicon.
 
+## Offline workspace milestone (current)
+- ✅ Reliable launch and a layout that fits the minimum window
+- ✅ Create, title, edit, save, reopen, copy original; session restore; unsaved-change protection
+- ✅ Visible, disabled “Reprompt with HCG AI”; empty Result pane with status message
+- ⏳ Next: connect the HCG AI service (ai.hakmicapitalgroup.com) through `HCGRepromptService`
+  once it is operational and its API is verified. Founder approval is required before activation.
+
 ## Candidates after 0.1.0
 - Streaming responses with live preview
 - Additional providers behind `AIProvider`

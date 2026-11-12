@@ -7,11 +7,11 @@ struct TemplatesView: View {
     @State private var selectedID: String?
     @State private var draft: PromptTemplate?
     @State private var pendingDeletion: PromptTemplate?
-    @State private var confirmReplaceWorkspace: PromptTemplate?
 
     var body: some View {
         let templates = model.allTemplates
-        HSplitView {
+        // A fixed-width list beside a flexible editor (no split view, no minimum widths).
+        HStack(spacing: 0) {
             List(selection: $selectedID) {
                 ForEach(TemplateCategory.allCases) { category in
                     let items = templates.filter { $0.category == category }
@@ -24,7 +24,7 @@ struct TemplatesView: View {
                                         if !template.isBuiltIn {
                                             Image(systemName: "person.crop.circle")
                                                 .font(.caption2)
-                                                .foregroundStyle(Theme.violet)
+                                                .foregroundStyle(Theme.accentSecondary)
                                                 .accessibilityLabel("Your template")
                                         } else if model.templates.isModified(template.id) {
                                             Image(systemName: "pencil.circle")
@@ -51,7 +51,10 @@ struct TemplatesView: View {
             }
             .listStyle(.inset)
             .scrollContentBackground(.hidden)
-            .frame(minWidth: 260, idealWidth: 320, maxWidth: 420, maxHeight: .infinity)
+            .frame(width: 260)
+            .frame(maxHeight: .infinity)
+
+            Divider()
 
             Group {
                 if let binding = Binding($draft) {
@@ -59,7 +62,7 @@ struct TemplatesView: View {
                         draft: binding,
                         original: templates.first { $0.id == binding.wrappedValue.id },
                         isModifiedBuiltIn: model.templates.isModified(binding.wrappedValue.id),
-                        onUse: { useTemplate($0) },
+                        onUse: { model.requestUseTemplate($0) },
                         onDelete: { pendingDeletion = $0 },
                         onDuplicate: { selectedID = model.duplicateTemplate($0).id }
                     )
@@ -71,7 +74,7 @@ struct TemplatesView: View {
                     )
                 }
             }
-            .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Theme.background)
         .navigationTitle("Templates")
@@ -112,26 +115,6 @@ struct TemplatesView: View {
                  ? "Built-in templates can be restored later from the More menu."
                  : "This template is permanently deleted.")
         }
-        .confirmationDialog(
-            "Replace the current prompt?",
-            isPresented: Binding(get: { confirmReplaceWorkspace != nil }, set: { if !$0 { confirmReplaceWorkspace = nil } }),
-            titleVisibility: .visible
-        ) {
-            Button("Replace") {
-                if let template = confirmReplaceWorkspace { model.useTemplate(template) }
-                confirmReplaceWorkspace = nil
-            }
-        } message: {
-            Text("The workspace contains a prompt. Using this template starts a new prompt; the current one stays in History if it was enhanced.")
-        }
-    }
-
-    private func useTemplate(_ template: PromptTemplate) {
-        if model.originalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            model.useTemplate(template)
-        } else {
-            confirmReplaceWorkspace = template
-        }
     }
 }
 
@@ -157,16 +140,10 @@ struct TemplateEditor: View {
                     Badge(text: isModifiedBuiltIn ? "Built-in · edited" : "Built-in", tint: Theme.textSecondary)
                 }
             }
-            HStack(spacing: 12) {
-                Picker("Category", selection: $draft.category) {
-                    ForEach(TemplateCategory.allCases) { Text($0.displayName).tag($0) }
-                }
-                .frame(maxWidth: 260)
-                Picker("Suggested mode", selection: $draft.suggestedMode) {
-                    ForEach(EnhancementMode.allCases) { Text($0.displayName).tag($0) }
-                }
-                .frame(maxWidth: 260)
+            Picker("Category", selection: $draft.category) {
+                ForEach(TemplateCategory.allCases) { Text($0.displayName).tag($0) }
             }
+            .frame(maxWidth: 300)
             TextField("Short description", text: $draft.summary)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Template description")
@@ -176,24 +153,30 @@ struct TemplateEditor: View {
             if !placeholders.isEmpty {
                 HStack(spacing: 6) {
                     Text("Placeholders:").font(.caption).foregroundStyle(Theme.textSecondary)
-                    ForEach(placeholders.prefix(6), id: \.self) { Badge(text: $0, tint: Theme.violet) }
-                    if placeholders.count > 6 {
-                        Text("+\(placeholders.count - 6)").font(.caption).foregroundStyle(Theme.textSecondary)
+                    ForEach(placeholders.prefix(4), id: \.self) { Badge(text: $0, tint: Theme.accentSecondary) }
+                    if placeholders.count > 4 {
+                        Text("+\(placeholders.count - 4)").font(.caption).foregroundStyle(Theme.textSecondary)
                     }
                 }
             }
 
             HStack {
-                Button(draft.isBuiltIn ? "Hide…" : "Delete…", role: .destructive) { onDelete(draft) }
-                if isModifiedBuiltIn {
-                    Button("Reset to Original") {
-                        model.resetTemplate(draft)
-                        if let restored = model.allTemplates.first(where: { $0.id == draft.id }) { draft = restored }
+                Menu {
+                    Button("Duplicate") { onDuplicate(draft) }
+                    if isModifiedBuiltIn {
+                        Button("Reset to Original") {
+                            model.resetTemplate(draft)
+                            if let restored = model.allTemplates.first(where: { $0.id == draft.id }) { draft = restored }
+                        }
                     }
+                    Divider()
+                    Button(draft.isBuiltIn ? "Hide…" : "Delete…", role: .destructive) { onDelete(draft) }
+                } label: {
+                    Label("More", systemImage: "ellipsis.circle")
                 }
-                Button("Duplicate") { onDuplicate(draft) }
-                    .help("Create an editable copy")
-                Spacer()
+                .fixedSize()
+                .help("Duplicate, reset or remove this template")
+                Spacer(minLength: 8)
                 if isDirty {
                     Button("Revert") { if let original { draft = original } }
                     Button("Save") { model.saveTemplate(draft) }
@@ -201,7 +184,7 @@ struct TemplateEditor: View {
                 }
                 Button("Use Template") { onUse(draft) }
                     .buttonStyle(.borderedProminent)
-                    .help("Start a new prompt from this template")
+                    .help("Start a new prompt from this template (your open prompt is protected if it has unsaved edits)")
             }
         }
         .padding(16)

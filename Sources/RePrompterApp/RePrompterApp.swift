@@ -9,16 +9,28 @@ struct RePrompterApp: App {
     @State private var model: AppModel
 
     init() {
-        _model = State(initialValue: AppModel.live())
+        let model = AppModel.live()
+        _model = State(initialValue: model)
+        // The open prompt is autosaved shortly after each edit; flush it when
+        // the app quits so the very last keystrokes are kept too.
+        _ = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { model.flushSession() }
+        }
     }
 
     var body: some Scene {
         Window(AppInfo.name, id: "main") {
             RootView()
                 .environment(model)
-                .frame(minWidth: 980, minHeight: 620)
+                // Every view inside fits this size: the workspace adapts its
+                // layout instead of requiring a minimum width.
+                .frame(minWidth: 860, minHeight: 560)
         }
-        .defaultSize(width: 1320, height: 820)
+        .defaultSize(width: 1280, height: 800)
         .commands {
             AppCommands(model: model, openAbout: { AboutWindow.show() })
         }
@@ -26,7 +38,7 @@ struct RePrompterApp: App {
         Settings {
             SettingsView()
                 .environment(model)
-                .frame(width: 640, height: 600)
+                .frame(width: 600, height: 480)
         }
     }
 }

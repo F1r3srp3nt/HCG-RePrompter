@@ -1,51 +1,61 @@
 import SwiftUI
 import RePrompterCore
-import RePrompterProviders
 
-/// The prompt-engineering workspace: original prompt, controls, output and inspector.
+/// Layout constants for the workspace.
+///
+/// The workspace deliberately avoids nested split views, the system inspector
+/// and minimum-width frames: its size is decided from the space it is given,
+/// so it can never ask for more width than the window allows (the earlier
+/// layout required ~1,170 pt inside a 980 pt minimum window).
+enum WorkspaceLayout {
+    static let inspectorWidth: CGFloat = 260
+    /// Below this content width, Original and Result are shown one at a time.
+    static let splitThreshold: CGFloat = 760
+    /// Share of the content width given to the Original editor in the split layout.
+    static let originalShare: CGFloat = 0.64
+}
+
+/// The offline prompt workspace: title, original prompt editor, result pane
+/// (empty until HCG AI is connected) and an optional inspector.
 struct WorkspaceView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        @Bindable var model = model
-        HSplitView {
-            OriginalPane()
-                .frame(minWidth: 340, idealWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
-            OutputPane()
-                .frame(minWidth: 380, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
+        GeometryReader { proxy in
+            let showInspector = model.settings.showInspector
+            let inspectorSpace = showInspector ? WorkspaceLayout.inspectorWidth + 1 : 0
+            let contentWidth = max(0, proxy.size.width - inspectorSpace)
+            let isWide = contentWidth >= WorkspaceLayout.splitThreshold
+            HStack(spacing: 0) {
+                WorkspaceContent(isWide: isWide, contentWidth: contentWidth)
+                    .frame(width: contentWidth)
+                if showInspector {
+                    Divider()
+                    InspectorView()
+                        .frame(width: WorkspaceLayout.inspectorWidth)
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
         }
         .background(Theme.background)
         .navigationTitle(model.effectiveTitle)
-        .inspector(isPresented: $model.settings.showInspector) {
-            InspectorView()
-                .inspectorColumnWidth(min: 250, ideal: 300, max: 420)
-        }
         .toolbar {
-            ToolbarItem(placement: .navigation) {
-                TextField("Untitled Prompt", text: $model.title)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 240)
-                    .help("Prompt name used in history, the library and exports")
-                    .accessibilityLabel("Prompt name")
-            }
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
-                    model.saveToLibrary()
+                    model.save()
                 } label: {
-                    Label("Save", systemImage: "bookmark")
+                    Label("Save", systemImage: "square.and.arrow.down")
                 }
+                .disabled(!model.canSave)
                 .help("Save to your library (⌘S)")
 
-                Menu {
-                    ForEach(ExportFormat.allCases) { format in
-                        Button(format.displayName) { model.exportWorkspace(as: format) }
-                    }
-                    Divider()
-                    Button("Save Original as Template") { model.saveWorkspaceAsTemplate() }
+                Button {
+                    model.copyOriginal()
                 } label: {
-                    Label("Export", systemImage: "square.and.arrow.up")
+                    Label("Copy Original", systemImage: "doc.on.doc")
                 }
-                .help("Export the prompt")
+                .disabled(!model.canCopyOriginal)
+                .help("Copy the original prompt (⇧⌘C)")
 
                 Button {
                     model.settings.showInspector.toggle()
@@ -54,6 +64,80 @@ struct WorkspaceView: View {
                 }
                 .help("Show or hide the inspector (⌥⌘I)")
             }
+        }
+    }
+}
+
+struct WorkspaceContent: View {
+    @Environment(AppModel.self) private var model
+    let isWide: Bool
+    let contentWidth: CGFloat
+
+    var body: some View {
+        VStack(spacing: 0) {
+            WorkspaceHeader(isWide: isWide)
+            Divider()
+            HStack(spacing: 0) {
+                // The Original pane keeps the same position in the view tree in
+                // both layouts, so its editor is not recreated when the window
+                // crosses the split threshold. The text itself lives in the
+                // model and is never held by a view.
+                if isWide || model.workspacePane == .original {
+                    OriginalPane()
+                        .frame(width: isWide ? (contentWidth * WorkspaceLayout.originalShare).rounded() : contentWidth)
+                }
+                if isWide {
+                    Divider()
+                }
+                if isWide || model.workspacePane == .result {
+                    ResultPane()
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .frame(maxHeight: .infinity)
+        }
+    }
+}
+
+struct WorkspaceHeader: View {
+    @Environment(AppModel.self) private var model
+    let isWide: Bool
+
+    var body: some View {
+        @Bindable var model = model
+        HStack(spacing: 10) {
+            TextField("Untitled Prompt", text: $model.title)
+                .textFieldStyle(.plain)
+                .font(.system(size: 17, weight: .semibold))
+                .accessibilityLabel("Prompt title")
+                .help("The name shown in your library and used for exports")
+            SaveStateBadge()
+            if !isWide {
+                Picker("Pane", selection: $model.workspacePane) {
+                    ForEach(WorkspacePane.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .help("Switch between the original prompt and the result")
+                .accessibilityLabel("Show pane")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Theme.surface)
+    }
+}
+
+struct SaveStateBadge: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if model.hasUnsavedChanges {
+            Badge(text: "Unsaved", systemImage: "circle.fill", tint: Theme.warning)
+                .help("This prompt has changes that are not in your library yet. They are kept if you quit.")
+        } else if model.currentRecord != nil {
+            Badge(text: "Saved", systemImage: "checkmark", tint: Theme.success)
         }
     }
 }
@@ -71,13 +155,17 @@ struct OriginalPane: View {
                     .font(.caption)
                     .monospacedDigit()
                     .foregroundStyle(Theme.textTertiary)
+                    .lineLimit(1)
             }
             PromptEditor(
                 text: $model.originalText,
-                placeholder: "Write or paste the prompt you want to improve…",
+                placeholder: "Write the prompt you want to work on…",
                 accessibilityLabel: "Original prompt"
             )
-            EnhancementControls()
+            ViewThatFits(in: .horizontal) {
+                OriginalActions(compact: false)
+                OriginalActions(compact: true)
+            }
         }
         .padding(14)
     }
@@ -88,230 +176,87 @@ struct OriginalPane: View {
     }
 }
 
-struct EnhancementControls: View {
+struct OriginalActions: View {
+    @Environment(AppModel.self) private var model
+    let compact: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button {
+                model.copyOriginal()
+            } label: {
+                actionLabel("Copy Original", systemImage: "doc.on.doc")
+            }
+            .disabled(!model.canCopyOriginal)
+            .help("Copy the original prompt (⇧⌘C)")
+
+            Button {
+                model.save()
+            } label: {
+                actionLabel("Save", systemImage: "square.and.arrow.down")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!model.canSave)
+            .help("Save to your library (⌘S)")
+
+            Spacer(minLength: 8)
+
+            RepromptButton()
+        }
+    }
+
+    @ViewBuilder
+    private func actionLabel(_ title: String, systemImage: String) -> some View {
+        if compact {
+            Label(title, systemImage: systemImage).labelStyle(.iconOnly)
+        } else {
+            Label(title, systemImage: systemImage)
+        }
+    }
+}
+
+/// The future HCG AI action. Visible, and disabled until the service is connected.
+struct RepromptButton: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        @Bindable var model = model
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Picker("Mode", selection: $model.mode) {
-                    ForEach(EnhancementMode.allCases) { mode in
-                        Label(mode.displayName, systemImage: mode.symbolName).tag(mode)
-                    }
-                }
-                .pickerStyle(.menu)
-                .frame(maxWidth: 230)
-                .accessibilityHint("Choose how the prompt is rewritten")
+        let availability = model.repromptAvailability
+        Button {
+            model.requestReprompt()
+        } label: {
+            Label(HCGAI.actionTitle, systemImage: "wand.and.stars")
+        }
+        .disabled(!availability.isAvailable)
+        .help(availability.message ?? HCGAI.actionTitle)
+        .accessibilityHint(availability.message ?? "")
+    }
+}
 
-                Text(model.mode.summary)
-                    .font(.caption)
+// MARK: - Result
+
+/// Empty until HCG AI is connected; states why.
+struct ResultPane: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            PaneHeader("Result", systemImage: "sparkles")
+            VStack(spacing: 12) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 26, weight: .light))
+                    .foregroundStyle(Theme.accent.opacity(0.75))
+                    .accessibilityHidden(true)
+                Text(model.repromptAvailability.message ?? "No result yet.")
+                    .font(.callout)
                     .foregroundStyle(Theme.textSecondary)
-                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-
-            if model.mode == .custom {
-                TextField(
-                    "Describe how you want the prompt rewritten (e.g. “numbered steps, formal tone, under 150 words”)",
-                    text: $model.customInstructions,
-                    axis: .vertical
-                )
-                .lineLimit(2...4)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityLabel("Custom style instructions")
-            }
-
-            HStack(spacing: 10) {
-                Picker("Processor", selection: $model.processor) {
-                    Text("AI · Claude").tag(ProcessorChoice.aiProvider)
-                    Text("Local · no AI").tag(ProcessorChoice.localFormatter)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 220)
-                .accessibilityLabel("Processor")
-                .disabled(model.isRunning)
-
-                Spacer()
-
-                if model.isRunning {
-                    ProgressView().controlSize(.small)
-                    Button("Cancel") { model.cancelEnhancement() }
-                        .help("Cancel the request (⌘.)")
-                } else {
-                    Text("⌘↩")
-                        .font(.caption)
-                        .foregroundStyle(Theme.textTertiary)
-                        .accessibilityHidden(true)
-                    Button {
-                        model.enhance()
-                    } label: {
-                        Label("Enhance", systemImage: "wand.and.stars")
-                            .padding(.horizontal, 6)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!model.canEnhance)
-                    .help("Enhance the prompt (⌘↩)")
-                }
-            }
-
-            ProcessorNotice()
-        }
-        .card(padding: 12)
-    }
-}
-
-/// States clearly where the prompt goes before anything is sent.
-struct ProcessorNotice: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        Group {
-            switch model.processor {
-            case .aiProvider where !model.hasAPIKey:
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.circle").foregroundStyle(Theme.warning)
-                    Text("No AI provider is configured.")
-                    Spacer()
-                    Button("Add API Key…") { model.selection = .settings }
-                    Button("Use Local") { model.processor = .localFormatter }
-                }
-            case .aiProvider:
-                HStack(spacing: 6) {
-                    Image(systemName: "lock.shield").foregroundStyle(Theme.accent)
-                    Text("Enhancing sends this prompt over HTTPS to \(model.providerHost) (model \(model.settings.anthropic.model)).")
-                }
-            case .localFormatter:
-                HStack(spacing: 6) {
-                    Image(systemName: "desktopcomputer").foregroundStyle(Theme.violet)
-                    Text("Runs on this Mac. Reorganizes your own words — this is not AI and nothing is sent.")
-                }
-            }
-        }
-        .font(.caption)
-        .foregroundStyle(Theme.textSecondary)
-        .buttonStyle(.link)
-    }
-}
-
-// MARK: - Output
-
-struct OutputPane: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        @Bindable var model = model
-        VStack(alignment: .leading, spacing: 10) {
-            PaneHeader("Result", systemImage: "sparkles") {
-                Picker("View", selection: $model.outputTab) {
-                    ForEach(OutputTab.allCases) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 260)
-                .disabled(!model.hasResult)
-            }
-
-            switch model.phase {
-            case let .running(status):
-                RunningView(status: status)
-            case let .failed(error):
-                ErrorCard(error: error)
-                if model.hasResult { Spacer(minLength: 0) }
-            case .idle:
-                if model.hasResult {
-                    switch model.outputTab {
-                    case .enhanced: EnhancedOutputView()
-                    case .compare: ComparisonView()
-                    case .changes: ChangesView()
-                    }
-                } else {
-                    EmptyStateView(
-                        title: "Ready when you are",
-                        message: "Write a prompt on the left, pick a mode and press Enhance. RePrompter keeps your intent and explains every change.",
-                        systemImage: "wand.and.stars"
-                    )
-                    .card()
-                }
-            }
+            .padding(20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .card()
+            .accessibilityElement(children: .combine)
         }
         .padding(14)
-    }
-}
-
-struct RunningView: View {
-    @Environment(AppModel.self) private var model
-    let status: String
-
-    var body: some View {
-        VStack(spacing: 14) {
-            ProgressView()
-            Text(status)
-                .font(.callout)
-                .foregroundStyle(Theme.textSecondary)
-                .multilineTextAlignment(.center)
-            Button("Cancel") { model.cancelEnhancement() }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .card()
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Enhancing. \(status)")
-    }
-}
-
-struct ErrorCard: View {
-    @Environment(AppModel.self) private var model
-    let error: EnhancementError
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(title, systemImage: "exclamationmark.triangle.fill")
-                .font(.headline)
-                .foregroundStyle(Theme.danger)
-            Text(error.errorDescription ?? "Something went wrong.")
-                .foregroundStyle(Theme.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-            HStack {
-                if needsSettings {
-                    Button("Open Settings") { model.selection = .settings }
-                }
-                if isNotConfigured {
-                    Button("Use Local Formatting (no AI)") { model.useLocalFormatting() }
-                }
-                Spacer()
-                Button("Dismiss") { model.dismissError() }
-                if error.canRetry {
-                    Button("Retry") { model.retry() }
-                        .buttonStyle(.borderedProminent)
-                }
-            }
-        }
-        .card(padding: 16)
-        .accessibilityElement(children: .contain)
-    }
-
-    private var title: String {
-        switch error {
-        case .input: "Check your prompt"
-        case .provider: "The AI provider could not complete the request"
-        case .contract: "The provider’s response could not be used"
-        case .cancelled: "Cancelled"
-        }
-    }
-
-    private var isNotConfigured: Bool {
-        error == .provider(.notConfigured) || error == .provider(.missingAPIKey)
-    }
-
-    private var needsSettings: Bool {
-        guard case let .provider(providerError) = error else { return false }
-        switch providerError {
-        case .notConfigured, .missingAPIKey, .authenticationFailed, .invalidConfiguration, .insecureEndpoint,
-             .modelNotFound, .truncated, .timeout, .credentialStore:
-            return true
-        default:
-            return false
-        }
     }
 }
